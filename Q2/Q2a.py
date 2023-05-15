@@ -1,3 +1,4 @@
+#Credit W08 of Jupyter Notebook
 import numpy as np
 import torch
 import torch.nn as nn
@@ -12,7 +13,7 @@ device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 train_data, test_data = datasets.load_dataset("cardiffnlp/tweet_topic_single", split=["train_coling2022", "test_coling2022"])
 
 #Splitting off our validation data set from our training data, choosing a small validation set because there are not many hyper paramters
-train_valid_data = train_data.train_test_split(test_size=0.2) 
+train_valid_data = train_data.train_test_split(test_size=0.1) 
 train_data = train_valid_data['train']
 valid_data = train_valid_data['test']
 
@@ -77,7 +78,7 @@ model = BoW(vocab_size=len(vocab)).to(device)
 
 # Define the optimiser and tell it what parameters to update, as well as the loss function
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-loss_fn = nn.CrossEntropyLoss().to(device)
+loss_fn = nn.CrossEntropyLoss().to(device) 
 
 def train(model, dataloader, loss_fn, optimizer, device):
     model.train()
@@ -130,8 +131,6 @@ for epoch in range(100):
     train_accuracies.append(train_accuracy)
     valid_losses.append(valid_loss)
     valid_accuracies.append(valid_accuracy)
-    print("Epoch {}: train_loss={:.4f}, train_accuracy={:.4f}, valid_loss={:.4f}, valid_accuracy={:.4f}".format(
-        epoch+1, train_loss, train_accuracy, valid_loss, valid_accuracy))
     
 fig, (ax1, ax2) = plt.subplots(2, figsize=(12, 8), sharex=True)
 ax1.plot(train_losses, color='b', label='train')
@@ -147,5 +146,3 @@ ax2.legend()
 test_loss, test_accuracy = evaluate(model, test_dataloader, loss_fn, device)
 print("Test loss: {:.4f}".format(test_loss))
 print("Test accuracy: {:.4f}".format(test_accuracy))
-
-#Potential over fitting
