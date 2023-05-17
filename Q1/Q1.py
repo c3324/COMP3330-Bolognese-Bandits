@@ -19,12 +19,12 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 ### Parameters ###########################
 batch_size = 128
 resize_resolution = 128
-epochs = 100
+epochs = 200
 learning_rate = 1e-3
 val_size = 0.1
 weight_decay = 0 #0.01 #L2 regularization
 
-CNN_layers = [32, 32, 64, 64, 128, 128]
+CNN_layers = [16, 16, 32, 32, 64, 64, 128, 128]
 Deep_layers = [512, 256, 128]
 
 
