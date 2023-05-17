@@ -16,6 +16,13 @@ valid_data = train_valid_data['test']
 # Preview our splits
 print(train_data, valid_data, test_data)
 
+tokenizer = torchtext.data.utils.get_tokenizer("basic_english")
+max_length = 600
+
+def tokenize_example(example, tokenizer, max_length):
+    tokens = tokenizer(example['text'])[:max_length]
+    return {'tokens': tokens}
+
 # class LSTM(nn.Module):
 #     def __init__(self, vocab_size, n_embed):
 #         super().__init__()
