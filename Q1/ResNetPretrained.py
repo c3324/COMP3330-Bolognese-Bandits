@@ -42,25 +42,9 @@ preprocess = weights.transforms()
 optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 loss_fn = torch.nn.CrossEntropyLoss()
 
-# Apply inference preprocessing transforms
-# cuda transforms
-train_transforms = torch.nn.Sequential(
-    transforms.RandomResizedCrop(scale=(0.6, 1.0), size=(resize_resolution,resize_resolution)),
-    transforms.RandomHorizontalFlip(),
-    transforms.RandomRotation(45),
-    transforms.RandomGrayscale(0.1),
-    transforms.RandomPerspective(p=0.3),
-    #transforms.ToTensor(),
-    transforms.Normalize( mean = (0,0,0), std = (1,1,1)), #ToTensor already normalizes?
-)
-eval_transforms = torch.nn.Sequential(
-    transforms.Resize(size=(resize_resolution,resize_resolution)),
-    #transforms.ToTensor(),
-    transforms.Normalize( mean = (0,0,0), std = (1,1,1)),
-)
 
 print("Loading data...") #webcrawlerDataFolder='dataset/web_crawled',
-train_data = Dataset("dataset/seg_train", webcrawlerDataFolder='dataset/web_crawled', transform_type='train', copy_amount=0, preload=False, img_resolution= resize_resolution, duplicate_smaller_samples=False, shrink_larger_samples=True)
+train_data = Dataset("dataset/seg_train", webcrawlerDataFolder='dataset/web_crawled', transform_type='train', copy_amount=0, preload=False, img_resolution= resize_resolution, duplicate_smaller_samples=False, shrink_larger_samples=False)
 #valid_data = Dataset("dataset/seg_train", webcrawlerDataFolder='dataset/web_crawled', transform=eval_transforms, use_data='last', data_amount=val_size, img_resolution= resize_resolution, preload=True, shrink_larger_samples=True)
 test_data = Dataset("dataset/seg_test", transform_type='eval', img_resolution= resize_resolution, preload=True)
 

@@ -9,7 +9,9 @@ import time
 from PIL import Image, ImageFile
 from torchvision.io import read_image, ImageReadMode
 from torchvision import transforms
+from sklearn.metrics import confusion_matrix
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Check which device is available
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -412,6 +414,8 @@ if __name__ == '__main__':
     
 
     test_accuracy, test_loss = 0, 0
+    preds = []
+    labels = []
     with torch.no_grad():
         # Iterate through batches
         for data, label in test_loader:
@@ -427,6 +431,8 @@ if __name__ == '__main__':
             acc = ((test_output_i.argmax(dim=1) == label).float().mean())
             test_accuracy += acc/len(test_loader)
             test_loss += test_loss_i/len(test_loader)
+            preds.append(test_output_i.argmax(dim=1))
+            labels.append(label)
 
     print("Test loss: {:.4f}".format(test_loss))
     print("Test accuracy: {:.2f}%".format(test_accuracy*100))
@@ -446,4 +452,26 @@ if __name__ == '__main__':
     plt.ylabel('Accuracy')
     plt.title('Training Accuracies')
     plt.legend()
+    plt.show()
+    
+    y_pred_test = np.argmax(model.predict(data.get_data('X_test')), axis=1)
+    y_test = np.argmax(data.get_data('y_test'), axis=1)
+    #print(y_pred_test, y_test)
+    confusion_mat = confusion_matrix(y_test, y_pred_test)
+    accuracy = accuracy_score(y_pred_test, y_test)
+    print("Accuracy of {:.2f}% ".format(accuracy*100))
+
+    # Confusion matrix
+    classes = data.get_classes()
+    #print(classes)
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(confusion_mat/864,
+                cmap='Blues',
+                xticklabels=classes,
+                yticklabels=classes,
+                annot=True,
+                fmt='.2%'
+                )
+    plt.xlabel('Prediction')
+    plt.ylabel('Label')
     plt.show()
