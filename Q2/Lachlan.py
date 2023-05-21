@@ -4,6 +4,7 @@ import torch.nn as nn
 import torchtext
 import datasets
 from datasets import load_dataset
+import matplotlib.pyplot as plt
 
 #GPU
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -123,9 +124,56 @@ def train(model, dataloader, loss_fn, optimizer, device):
         
         #Log
         losses.append(loss.detach().cpu().numpy())
-        accuracy = torch.sum(torch.argmax(preds, dim=1) == labels) / labels.shape[0]
+        accuracy = torch.sum(torch.argmax(preds, dim=-1) == labels) / labels.shape[0]
         accuracies.append(accuracy.detatch().cpu().numpy())
         
     return np.mean(losses), np.mean(accuracies)
 
 
+def evaluate(model, dataloader, loss_fn, device):
+    model.eval()
+    losses, accuracies = [], []
+    with torch.no_grad():
+        for batch in dataloader:
+            inputs = batch['ids'].to(device)
+            labels = batch['label'].to(device)
+        
+        #forward pass
+        preds = model(inputs)
+        
+        #Calculate loss
+        loss = loss_fn(preds, labels)
+        
+        #Log
+        losses.append(loss.detach().cpu().numpy())
+        accuracy = torch.sum(torch.argmax(preds, dim=-1) == labels) / labels.shape[0]
+        accuracies.append(accuracy.detach().cpu().numpy())
+    return np.mean(losses), np.mean(accuracies)
+
+train_losses, train_accuracies = [],[]
+valid_losses, valid_accuracties = [],[]
+
+for epoch in range(5):
+    train_loss, train_accuracy = train(model, train_dataloader, loss_fn, optimizer, device)
+    valid_loss, valid_accuracy = evaluate(model, valid_dataloader, loss_fn, device)
+    
+    train_losses.append(train_loss)
+    train_accuracies.append(train_accuracy)
+    valid_losses.append(valid_loss)
+    valid_accuracies.append(valid_accuracy)
+    print(f"Epoch {epoch+1}: train_loss={train_loss:.4f}, train_accuracy={train_accuracy:.4f}, valid_loss={valid_loss:.4f}, valid_accuracy={valid_accuracy:.4f}")
+    
+fig, (ax1, ax2) = plt.subplots(2, figsize=(12, 8), sharex=True)
+ax1.plot(train_losses, color='b', label='train')
+ax1.plot(valid_losses, color='r', label='valid')
+ax1.set_ylabel("Loss")
+ax1.legend()
+ax2.plot(train_accuracies, color='b', label='train')
+ax2.plot(valid_accuracies, color='r', label='valid')
+ax2.set_ylabel("Accuracy")
+ax2.set_xlabel("Epoch")
+ax2.legend()
+
+test_loss, test_accuracy = evluate(model, test_dataloader, loss_fn, device)
+print(f"Test loss: {test_loss:.4f}")
+print(f"Test accuracy: {test_accuracy:.4f}")
