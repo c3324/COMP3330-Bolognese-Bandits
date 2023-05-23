@@ -14,8 +14,6 @@ from Tweet import Tweets
 import matplotlib.pyplot as plt
 
 FIGPATH = 'Q2/figs/'
-
-
 def progressBar(iterable, prefix='', suffix='', decimals=1, length=100, fill='â–ˆ', printEnd="\r"):
     """
     Call in a loop to create terminal progress bar
@@ -45,19 +43,6 @@ def progressBar(iterable, prefix='', suffix='', decimals=1, length=100, fill='â–
         printProgressBar(i + 1)
     # Print New Line on Complete
     print()
-
-
-# Check which device is available
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print('Using {}'.format(device))
-
-
-vocab = {}
-vocab['<PAD>'] = len(vocab)
-trainDataSet, validationDataSet = random_split(Tweets(
-    "Q2/dataset/split_coling2022_temporal/train_2020.single.json", vocab), [0.7, 0.3])
-testDataSet = Tweets(
-    "Q2/dataset/split_coling2022_temporal/train_2020.single.json", vocab)
 
 
 def mainModel(model,modelName, lossFn, Opts, optNames, epochs):
@@ -176,10 +161,20 @@ def test(data, lossfn, model):
     return epochloss/len(data), correct / len(data)
 
 
-# trainDataLoader = DataLoader(trainDataSet, batch_size=5, shuffle=True, collate_fn=collate)
-# validationDataLoader = DataLoader(validationDataSet, batch_size=5, shuffle=True, collate_fn=collate)
-# testDataLoader = DataLoader(testDataSet, batch_size=5, shuffle=True, collate_fn=collate)
-BATCH_SIZE = 64
+
+# Check which device is available
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+print('Using {}'.format(device))
+BATCH_SIZE = 128
+
+
+vocab = {}
+vocab['<PAD>'] = len(vocab)
+trainDataSet, validationDataSet = random_split(Tweets(
+    "Q2/dataset/split_coling2022_random/test_random.single.json", vocab), [0.7, 0.3])
+testDataSet = Tweets(
+    "Q2/dataset/split_coling2022_random/train_random.single.json", vocab)
+
 trainDataLoader = DataLoader(trainDataSet, batch_size=BATCH_SIZE, shuffle=True)
 validationDataLoader = DataLoader(
     validationDataSet, batch_size=BATCH_SIZE)
@@ -189,29 +184,34 @@ hidden32 = Hidden32(len(vocab), 6).to(device)
 hidden8_16_8 = Hidden8_16_8(len(vocab), 6).to(device)
 hidden32relu = Hidden32WithExtraEmbedding(len(vocab), 6).to(device)
 extra1Layers = ExtraLSTMLayers(len(vocab), 6, 2).to(device)
-extra127Layers = ExtraLSTMLayers(len(vocab), 6, 64).to(device)
+# extra127Layers = ExtraLSTMLayers(len(vocab), 6, ).to(device)
 lsm = logSoftMax(len(vocab), 6).to(device)
 
-mainLoss = nn.BCELoss()
+mainLoss = nn.CrossEntropyLoss()
 lsmLoss = nn.NLLLoss()
 
 modelLossPairs = [(hidden32, 'hidden32', mainLoss), (hidden8_16_8,'hidden 8 16 8', mainLoss), (hidden32relu,'hidden w relu',
-                                                                   mainLoss), (extra1Layers,'1 extra lstm layer', mainLoss), (extra127Layers,'127 extra lstm layer', mainLoss)]
+                                                                   mainLoss), (extra1Layers,'1 extra lstm layer', mainLoss)]
 
 finalAccs = {}
 finalLosses = {}
 for model, modelName, lossfn in modelLossPairs:
-    adam05 = opt.Adam(model.parameters(), lr=0.2)
-    adam1 = opt.Adam(model.parameters(), lr=0.1)
-    adam2 = opt.Adam(model.parameters(), lr=0.01)
-    adam3 = opt.Adam(model.parameters(), lr=0.001)
-    SGD05 = opt.SGD(model.parameters(), lr=0.2)
-    SGD1 = opt.SGD(model.parameters(), lr=0.1)
-    SGD2 = opt.SGD(model.parameters(), lr=0.01)
-    SGD3 = opt.SGD(model.parameters(), lr=0.001)
-    opts = [adam05,adam1, adam2, adam3, SGD05, SGD1, SGD2, SGD3]
-    optNames = ['adam-0.2','adam-0.1', 'adam-0.01', 'adam-0.001', 'SGD-0.2', 'SGD-0.1', 'SGD-0.01', 'SGD-0.001']
-    loss, acc, name = mainModel(model, modelName, lossfn, opts, optNames, 200)
+    # adam05 = opt.Adam(model.parameters(), lr=0.2)
+    # adam1 = opt.Adam(model.parameters(), lr=0.1)
+    # adam2 = opt.Adam(model.parameters(), lr=0.01)
+    # adam3 = opt.Adam(model.parameters(), lr=0.001)
+    # SGD05 = opt.SGD(model.parameters(), lr=0.2)
+    # SGD1 = opt.SGD(model.parameters(), lr=0.1)
+    # SGD2 = opt.SGD(model.parameters(), lr=0.01)
+    # SGD3 = opt.SGD(model.parameters(), lr=0.001)
+    # opts = [adam05,adam1, adam2, adam3, SGD05, SGD1, SGD2, SGD3]
+    # optNames = ['adam-0.2','adam-0.1', 'adam-0.01', 'adam-0.001', 'SGD-0.2', 'SGD-0.1', 'SGD-0.01', 'SGD-0.001']
+    adam1 = opt.Adam(model.parameters(), lr=0.00001, weight_decay=0.1)
+    adam2 = opt.Adam(model.parameters(), lr=0.0001, weight_decay=0.1)
+    adam3 = opt.Adam(model.parameters(), lr=0.000001, weight_decay=0.1)
+    opts = [adam1, adam2, adam3]
+    optNames = ['adam-0.00001', 'adam-0.0001', 'adam-0.000001']
+    loss, acc, name = mainModel(model, modelName, lossfn, opts, optNames, 300)
     finalAccs[name] = acc.detach().cpu().numpy()
     finalLosses[name] = loss.detach().cpu().numpy()
     
