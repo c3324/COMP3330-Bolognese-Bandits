@@ -1,117 +1,776 @@
-from torchvision.io import read_image
-from torchvision.models.quantization import resnet50, ResNet50_QuantizedWeights
-from torchvision.models import resnet50, ResNet50_Weights
-import timeit
-import time
-
-from Q1 import Dataset
 from trainer import trainer
 
-
-from PIL import Image, ImageFile
 import torch
-
+import pandas as pd
+import numpy as np
+import os
+import glob
+import time
+from PIL import Image, ImageFile 
+from torchvision.io import read_image, ImageReadMode
 from torchvision import transforms
+from sklearn.metrics import confusion_matrix, accuracy_score
 import matplotlib.pyplot as plt
+import seaborn as sns
+import os
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
 
-# Check which device is available
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print('Using {}'.format(device))
 
-
+#ImageFile Fix
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 ### Parameters ###########################
 batch_size = 128
 resize_resolution = 128
-warmup_epochs = 5
-epochs = 15
-learning_rate = 0.01
-warmup_learning_rate = 1e-4
-weight_decay = 0.1  #L2 regularization
+epochs = 10
+learning_rate = 1e-3
+val_size = 0.1
+weight_decay = 0 #L2 regularization
+
+CNN_layers = [16, 32, 32, 64, 64, 128]
+Deep_layers = [256, 128]
+dropout = 0
 
 
-# Initialize model with the best available weights
-#weights = ResNet50_QuantizedWeights.DEFAULT
-weights = ResNet50_Weights.IMAGENET1K_V2
-model = resnet50(weights=weights)
-num_ftrs = model.fc.in_features
-model.fc = torch.nn.Linear(num_ftrs, 6)
-model = model.to(device)
-model.eval()
+class Dataset(torch.utils.data.Dataset):
+    def __init__(self, data_folder, webcrawlerDataFolder=None, transform_type='train', duplicate_smaller_samples=False, shrink_larger_samples=False, use_data='first', data_amount=1, copy_amount=0, preload=False, img_resolution=256):
+        '''Dataset helper class for images containing buildings (0), forest (1), glacier (2), mountain (3), sea (4), street (5)'''
+        '''params:      - data_folder:                  folder containing class folders
+                        - transform:                    transforms to use on data
+                        - duplicate_smaller_samples:    whether to equalize dataset sizes to reduce bias by copying samples from smaller classes
+                        - use_data:                     index from first or last item - > useful for splitting data into training at test sets
+                        - data_amount:                  float of amount of data to use where 1.0 = all available data
+                        - copy_amount:                  int of number of times to copy dataset - > use with transform to reduce overfitting -> useful when not transforming at train time.
+                        - preload:                      preload images to ram to reduce disk usage.
+                        - image_resolution:             resolution of images'''
+        # Establish number of inputs for each class to reduce NN bias
+        max_count = 0 
+        self.preload = preload
+        class_counts = {
+            'buildings':0,
+            'forest':0,
+            'glacier':0,
+            'mountain':0,
+            'sea':0,
+            'street':0
+        }
+        for dir in os.listdir(data_folder):
+            class_folder = data_folder + "/" + dir
+            file_counter = len(glob.glob1(class_folder, "*.jpg"))
+            class_counts[dir] += file_counter
+            if webcrawlerDataFolder == None:
+                if file_counter > max_count:
+                    max_count = file_counter   
+        
+        if webcrawlerDataFolder != None:
+            for dir in os.listdir(webcrawlerDataFolder):
+                class_folder = webcrawlerDataFolder + "/" + dir
+                file_counter = len(glob.glob1(class_folder, "*.jpg"))
+                class_counts[dir] += file_counter
+                if class_counts[dir] > max_count:
+                    max_count = class_counts[dir] 
 
-# Initialize the inference transforms
-preprocess = weights.transforms()
+        min_count = min(class_counts.values())
+        print(max_count, class_counts)
+        class_num = 0
+        self.labels = np.empty((0,1))
+        self.image_paths = np.empty((0,1))
+        print("Found folders for", os.listdir(data_folder))
+        for dir in os.listdir(data_folder):
+            class_folder = data_folder + "/" + dir
+            image_paths = glob.glob(os.path.join(class_folder, '*.jpg'))
+            image_paths.sort()
+            print("Fetching paths for", dir, "with label", class_num)
+            
+            file_counter = class_counts[dir]
+            
+            if webcrawlerDataFolder != None:
+                web_class_folder = webcrawlerDataFolder + "/" + dir
+                new_image_paths = glob.glob(os.path.join(web_class_folder, '*.jpg'))
+                new_image_paths.sort()
+                image_paths = np.append(image_paths, new_image_paths)
+                
+            if data_amount != 1:
+                # shorthand train/val split..
+                if use_data == 'first':
+                    image_paths = image_paths[:int(len(image_paths) * data_amount)]
+                elif use_data == 'last':
+                    image_paths = image_paths[-int(len(image_paths) * data_amount):]
+                
+            if duplicate_smaller_samples:
+                diff = int((max_count * data_amount) - len(image_paths))
+                as_pandas = pd.DataFrame(image_paths)
+                dupes  = as_pandas.sample(diff, replace=True).to_numpy()
+                image_paths = np.append(image_paths, dupes)
+                
+            elif shrink_larger_samples: # if not duplicate -> shrink larger samples
+                #diff = int((min_count * data_amount) - len(image_paths))
+                sample_size = int(min_count * data_amount)
+                as_pandas = pd.DataFrame(image_paths)
+                dupes  = as_pandas.sample(sample_size).to_numpy()
+                image_paths = dupes # drop excess samples
+                
+            print(dir, "has", len(image_paths), "samples")
 
-# Set loss function and optimizer
-optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-warmup_optimizer = torch.optim.Adam(params=model.parameters(), lr=warmup_learning_rate)
-loss_fn = torch.nn.CrossEntropyLoss()
+                    
+            self.image_paths = np.append(self.image_paths, image_paths) # ideally np.append/np.concat is not used as it will need to re-allocate memory each call, but this only happens 5 times?..
+            
+            temp_labels = np.full((len(image_paths), 1), class_num)
+            self.labels = np.append(self.labels, temp_labels) # similarly..
+
+            class_num += 1
+
+        for idx, path in enumerate(self.image_paths): # thought was cause for read_iamge bug
+            if "\\" in path:
+                #print("Found \\ in", path)
+                self.image_paths[idx] = str(path).replace('\\', '/')
+                #print(self.image_paths[idx])
+                
+        # #exit()
+        
+        for i in range(copy_amount):
+            # This will then be transformed slightly differently by the transform call.
+            self.image_paths = np.append(self.image_paths, self.image_paths)
+            self.labels = np.append(self.labels, self.labels)
+         
+        self.transform_type = transform_type
+        self.n = len(self.image_paths)
+        
+        self.train_transforms = torch.nn.Sequential(
+            transforms.RandomResizedCrop(scale=(0.6, 1.0), size=(resize_resolution,resize_resolution)),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(45),
+            transforms.RandomGrayscale(),
+            transforms.RandomPerspective(),
+            transforms.RandomErasing()
+            #transforms.ToTensor(), # already a tensor
+            #transforms.Normalize( mean = (0,0,0), std = (1,1,1)), #ToTensor already normalizes
+        )
+        self.eval_transforms = eval_transforms = torch.nn.Sequential(
+            transforms.Resize(size=(resize_resolution,resize_resolution)),
+            #transforms.ToTensor(),
+            #transforms.Normalize( mean = (0,0,0), std = (1,1,1)),
+        )
+        self.pil_transform = transforms.ToPILImage()
+        self.tensor_transform = transforms.ToTensor()
+
+      
+        if preload:
+            print("Preloading data to main memory...")
+            self.images = np.empty((self.n, 3, img_resolution, img_resolution)) # n_items, n_channels (RGB), img width, img height
+            for i in range(self.n):
+                #img = Image.open(self.image_paths[i]).convert('RGB') #.convert RGB forces images with alpha channel into 3 RGB channels
+                #print(self.image_paths[i])
+                img = read_image(str(self.image_paths[i]), ImageReadMode.RGB)
+                #img = self.resize_transform(img).type(torch.FloatTensor).to(device)
+                #img = self.transform(img).cpu()
+                self.images[i] = self.eval_transform(img).cpu()
+            #self.images = self.images.astype(torch.FloatTensor)
+            
+        #self.labels = self.labels.astype(torch.LongTensor)
+        
+    def train_transform(self, img):
+        # cuda transforms
+        img = self.train_transforms(img)
+        # below is oddly efficient normalization to [0, 1]
+        img = self.pil_transform(img)
+        #img.show()
+        img = self.tensor_transform(img)
+        return img  
+    
+    def eval_transform(self, img):
+        img = self.eval_transforms(img)
+        img = self.pil_transform(img)
+        #img.show()
+        img = self.tensor_transform(img)
+        return img
+
+        
+    def __len__(self):
+        return self.n
+    
+    def __getitem__(self, idx):
+        """Get one example"""
+        label = self.labels[idx]
+        if self.preload != True:
+            img_path = self.image_paths[idx]
+            #img = Image.open(img_path).convert('RGB') #.convert RGB forces images with alpha channel into 3 RGB channels
+            img = read_image(str(img_path), ImageReadMode.RGB).to(device)
+            if self.transform_type == 'train':
+                img_transformed = self.train_transform(img)
+            else:
+                img_transformed = self.eval_transform(img)
+            # img = self.resize_transform(img)
+            # img_transformed = self.transform(img) 
+            # img_transformed = self.normalize(img_transformed)
+            return img_transformed, label
+            
+            
+        else:
+            return self.images[idx], label
+            
+    
+    
 
 
-print("Loading data...") #webcrawlerDataFolder='dataset/web_crawled',
-train_data = Dataset("dataset/seg_train", transform_type='train', copy_amount=0, preload=False, img_resolution= resize_resolution, duplicate_smaller_samples=False, shrink_larger_samples=False)
-#valid_data = Dataset("dataset/seg_train", webcrawlerDataFolder='dataset/web_crawled', transform=eval_transforms, use_data='last', data_amount=val_size, img_resolution= resize_resolution, preload=True, shrink_larger_samples=True)
-test_data = Dataset("dataset/seg_test", transform_type='eval', img_resolution= resize_resolution, preload=True)
+# class Model(torch.nn.Module):
+#     def __init__(self):#, dropout_amount=0.1, input_dropout=0.5):
+#         super(Model, self).__init__()
+#         self.conv_layer_0 = torch.nn.Sequential(
+#             torch.nn.Conv2d(3, 16, kernel_size=7, padding='same'),
+#             #torch.nn.Dropout(input_dropout),
+#             #torch.nn.BatchNorm2d(16),
+#             torch.nn.SELU(),
+#             torch.nn.MaxPool2d(2)
+#             #torch.nn.AvgPool2d(2, stride=2)
+#         )
+#         self.conv_layer_1_1 = torch.nn.Sequential(
+#             torch.nn.Conv2d(16, 64, kernel_size=5, padding='same'),
+#             #torch.nn.Dropout(dropout_amount),
+#             #torch.nn.BatchNorm2d(64),
+#             torch.nn.SELU(),
+#             torch.nn.MaxPool2d(2)
+#         )
+#         self.conv_layer_1_2 = torch.nn.Sequential(
+#             torch.nn.Conv2d(64, 64, kernel_size=5, padding='same'),
+#             #torch.nn.Dropout(dropout_amount),
+#             #torch.nn.BatchNorm2d(64),
+#             torch.nn.SELU(),
+#             torch.nn.MaxPool2d(2)
+#         )
+#         self.conv_layer_1_3 = torch.nn.Sequential(
+#             torch.nn.Conv2d(64, 64, kernel_size=5, padding='same'),
+#             #torch.nn.Dropout(dropout_amount),
+#             #torch.nn.BatchNorm2d(64),
+#             torch.nn.SELU(),
+#             torch.nn.MaxPool2d(2)
+#         )
+#         self.conv_layer_1_3 = torch.nn.Sequential(
+#             torch.nn.Conv2d(64, 128, kernel_size=3, padding='same'),
+#             #torch.nn.Dropout(dropout_amount),
+#             #torch.nn.BatchNorm2d(128),
+#             torch.nn.SELU(),
+#             torch.nn.MaxPool2d(2)
+#         )
+#         self.conv_layer_2_1 = torch.nn.Sequential(
+#             torch.nn.Conv2d(128, 128, kernel_size=3, padding='same'),
+#             #torch.nn.Dropout(dropout_amount),
+#             #torch.nn.BatchNorm2d(128),
+#             torch.nn.SELU(),
+#             torch.nn.MaxPool2d(2)
+#         )
+#         self.conv_layer_2_2 = torch.nn.Sequential(
+#             torch.nn.Conv2d(128, 128, kernel_size=3, padding='same'),
+#             #torch.nn.Dropout(dropout_amount),
+#             #torch.nn.BatchNorm2d(128),
+#             torch.nn.SELU(),
+#             torch.nn.MaxPool2d(2)
+#         )
+#         self.conv_layer_2_3 = torch.nn.Sequential(
+#             torch.nn.Conv2d(128, 128, kernel_size=3, padding='same'),
+#             #torch.nn.Dropout(dropout_amount),
+#             #torch.nn.BatchNorm2d(128),
+#             torch.nn.SELU(),
+#             torch.nn.MaxPool2d(2)
+#         )
+#         self.fc_layer_1 = torch.nn.Sequential(
+#             torch.nn.Linear(128, 1024),
+#             #torch.nn.Dropout(dropout_amount),
+#             #torch.nn.BatchNorm1d(1024),
+#             torch.nn.Dropout(),
+#             torch.nn.SELU()
+#         )
+#         self.fc_layer_2 = torch.nn.Sequential(
+#             torch.nn.Linear(1024, 512),
+#             #torch.nn.Dropout(dropout_amount),
+#             #torch.nn.BatchNorm1d(512),
+#             torch.nn.Dropout(),
+#             torch.nn.SELU()
+#         )
+#         self.fc_layer_3 = torch.nn.Sequential(
+#             torch.nn.Linear(512, 128),
+#             #torch.nn.Dropout(dropout_amount),
+#             #torch.nn.BatchNorm1d(128),
+#             torch.nn.Dropout(),
+#             torch.nn.SELU()
+#         )
+#         self.fc_layer_outputs = torch.nn.Linear(128, 6)
 
-# Wrap in DataLoader objects with batch size and shuffling preference
-train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
-valid_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False) # note this is set to test set!
-test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False)
+
+#     def forward(self, x):
+#         x = self.conv_layer_0(x)
+#         x = self.conv_layer_1_1(x)
+#         x = self.conv_layer_1_2(x)
+#         x = self.conv_layer_1_3(x)
+#         x = self.conv_layer_2_1(x)
+#         x = self.conv_layer_2_2(x)
+#         x = self.conv_layer_2_3(x)
+#         #x = x.view(x.size(0), -1) # Flatten
+#         x = x.reshape(x.shape[0], -1) # Flatten without accounting for batch size
+#         x = self.fc_layer_1(x)
+#         x = self.fc_layer_2(x)
+#         x = self.fc_layer_3(x)
+#         x = self.fc_layer_outputs(x)
+#         return x
+    
+class Model(torch.nn.Module):
+    def __init__(self, CNN_layers=[], Dense_layers=[], dropout=0, activation_function=torch.nn.ReLU):#, dropout_amount=0.1, input_dropout=0.5):
+        super(Model, self).__init__()
+        self.cnn_layers = torch.nn.ModuleList()
+        self.cnn_layers.append(
+            torch.nn.Sequential(
+                torch.nn.Conv2d(3, 16, kernel_size=3, padding='same'),
+                torch.nn.BatchNorm2d(16),
+                activation_function(),
+                torch.nn.MaxPool2d(2)
+            )
+        )
+        if dropout != 0:
+            self.cnn_layers.append(torch.nn.Dropout(dropout))
+        prev_layer = 16
+        
+        for layer in CNN_layers:
+            self.cnn_layers.append(
+                torch.nn.Sequential(
+                    torch.nn.Conv2d(prev_layer, layer, kernel_size=3, padding='same'),
+                    torch.nn.BatchNorm2d(layer),
+                    activation_function(),
+                    torch.nn.MaxPool2d(2)
+                )
+            )
+            if dropout != 0:
+                self.cnn_layers.append(torch.nn.Dropout(dropout))
+            prev_layer = layer
+            
+        prev_layer = 128
+        self.dense_layers = torch.nn.ModuleList()
+        for layer in Dense_layers:
+            self.dense_layers.append(
+                torch.nn.Sequential(
+                    torch.nn.Linear(prev_layer, layer),
+                    activation_function()
+                )
+            )
+            if dropout != 0:
+                self.dense_layers.append(torch.nn.Dropout(dropout))
+            prev_layer = layer
+        self.fc_layer_outputs = torch.nn.Linear(prev_layer, 6)
 
 
-# Evaluate before training
-val_start_time = time.time()
-# Track epoch loss and accuracy
-accuracy, loss = 0, 0
-# Switch model to evaluation (affects batch norm and dropout)
-model.eval()
-# Disable gradients
-with torch.no_grad():
-    # Iterate through batches
-    for data, label in valid_loader:
-        # Move data to the used device
-        label = label.type(torch.LongTensor) # move to outside of training loop for efficiency..
-        data = data.type(torch.FloatTensor)
-        data = data.to(device)
-        label = label.to(device)
-        # Forward pass
-        valid_output = model(data)
-        valid_loss = loss_fn(valid_output, label)
-        # Compute metrics
-        acc = ((valid_output.argmax(dim=1) == label).float().mean())
-        accuracy += acc/len(valid_loader)
-        loss += valid_loss/len(valid_loader) 
+    def forward(self, x):
+        for layer in self.cnn_layers:
+            x = layer(x)
+        x = x.view(x.size(0), -1) # Flatten
+        for layer in self.dense_layers:
+            x = layer(x)
+        x = self.fc_layer_outputs(x)
+        return x
 
-print('Initial Pretrained model Accuracy:   {:.2f}%,   Loss: {:.4f}   |   {:.2f}s'.format(accuracy*100, loss, time.time()-val_start_time))
+def init_weights(m):
+    if type(m) == torch.nn.Linear or type(m) == torch.nn.Conv2d:
+        torch.nn.init.xavier_normal_(m.weight)
 
-
-# Train Model on new Data
-print("Begining Warmup Training...")
-
-warmup_trainer = trainer(model, train_loader, valid_loader, warmup_epochs, warmup_optimizer, device, loss_fn)
-warmup_trainer.train()
-
-print("Begining Training...")
-resnet_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
-train_losses, val_losses, train_accs, val_accs = resnet_trainer.train()
-
-
-plt.plot(train_losses, label='train loss')
-plt.plot(val_losses, label='validated loss')
-plt.xlabel('epoch')
-plt.ylabel('loss')
-plt.title('Training Losses')
-plt.legend()
-plt.show()
-
-plt.plot(train_accs, label='train accuracy')
-plt.plot(val_accs, label='validated accuracy')
-plt.xlabel('epoch')
-plt.ylabel('Accuracy')
-plt.title('Training Accuracies')
-plt.legend()
-plt.show()
+def eval(model):
+    test_accuracy, test_loss = 0, 0
+    preds = []
+    labels = []
+    with torch.no_grad():
+        # Iterate through batches
+        for data, label in test_loader:
+            # Move data to the used device
+            label = label.type(torch.LongTensor) # move to outside of training loop for efficiency..
+            data = data.type(torch.FloatTensor)
+            data = data.to(device)
+            label = label.to(device)
+            # Forward pass
+            test_output_i = model(data)
+            test_loss_i = loss_fn(test_output_i, label)
+            # Compute metrics
+            acc = ((test_output_i.argmax(dim=1) == label).float().mean())
+            test_accuracy += acc/len(test_loader)
+            test_loss += test_loss_i/len(test_loader)
+            preds.append(test_output_i.argmax(dim=1))
+            labels.append(label)
 
 
+    return test_loss, test_accuracy
+
+
+
+if __name__ == '__main__':
+
+    # Check which device is available
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print('Using {}'.format(device))
+    
+    # Create our dataset splits
+    print("Fetching data...") #webcrawlerDataFolder='dataset/web_crawled,'
+    train_data = Dataset("dataset/seg_train", transform_type='train', copy_amount=0, preload=False, data_amount=1-val_size, img_resolution= resize_resolution, duplicate_smaller_samples=False, shrink_larger_samples=False)
+    valid_data = Dataset("dataset/seg_train", transform_type='eval', use_data='last', data_amount=val_size, img_resolution= resize_resolution, preload=True)
+    test_data = Dataset("dataset/seg_test", transform_type='eval', img_resolution= resize_resolution, preload=True)
+
+
+    # Check our dataset sizes
+    print("Train: {} examples".format(len(train_data)))
+    print("Valid: {} examples".format(len(valid_data)))
+    print("Test: {} examples".format(len(test_data)))
+
+    # Wrap in DataLoader objects with batch size and shuffling preference
+    train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(dataset=valid_data, batch_size=batch_size, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False) 
+
+    # Check number of batches
+    print("Train: {} batches".format(len(train_loader)))
+    print("Valid: {} batches".format(len(valid_loader))) 
+    print("Test: {} batches".format(len(test_loader))) 
+
+
+    # control model ************
+    model = Model(CNN_layers, Deep_layers, dropout=dropout)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('Control Model Training Losses')
+    plt.legend()
+    plt.savefig('Control model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Control Model Training Accuracies')
+    plt.legend()
+    plt.savefig('Control model acc.png')
+    plt.close()
+
+
+    # batch size 1 model *********
+    train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=1, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(dataset=valid_data, batch_size=1, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=1, shuffle=False) 
+
+    # Check number of batches
+    print("Train: {} batches".format(len(train_loader)))
+    print("Valid: {} batches".format(len(valid_loader))) 
+    print("Test: {} batches".format(len(test_loader))) 
+
+
+    model = Model(CNN_layers, Deep_layers, dropout=dropout)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('Batchsize of 1 Model Training Losses')
+    plt.legend()
+    plt.savefig('batchsize of 1 model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Batchsize of 1 Model Training Accuracies')
+    plt.legend()
+    plt.savefig('batchsize of 1 model acc.png')
+    plt.close()
+
+    # Dropout model *********
+    train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(dataset=valid_data, batch_size=batch_size, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False) 
+
+    # Check number of batches
+    print("Train: {} batches".format(len(train_loader)))
+    print("Valid: {} batches".format(len(valid_loader))) 
+    print("Test: {} batches".format(len(test_loader))) 
+
+    model = Model(CNN_layers, Deep_layers, dropout=0.3)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('Dropout Model Training Losses')
+    plt.legend()
+    plt.savefig('Dropout model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Dropout Model Training Accuracies')
+    plt.legend()
+    plt.savefig('Dropout model acc.png')
+    plt.close()
+
+
+    # L2 model *********
+
+    model = Model(CNN_layers, Deep_layers, dropout=dropout)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=0.1)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('Weight Decay Model Training Losses')
+    plt.legend()
+    plt.savefig('Weight Decay  model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Weight Decay  Model Training Accuracies')
+    plt.legend()
+    plt.savefig('Weight Decay  model acc.png')
+    plt.close()
+
+
+    # Drop Extra Samples model *********
+    train_data = Dataset("dataset/seg_train", transform_type='train', copy_amount=0, preload=False, data_amount=1-val_size, img_resolution= resize_resolution, duplicate_smaller_samples=False, shrink_larger_samples=True)
+    valid_data = Dataset("dataset/seg_train", transform_type='eval', use_data='last', data_amount=val_size, img_resolution= resize_resolution, preload=True)
+    test_data = Dataset("dataset/seg_test", transform_type='eval', img_resolution= resize_resolution, preload=True)
+
+    # Check our dataset sizes
+    print("Train: {} examples".format(len(train_data)))
+    print("Valid: {} examples".format(len(valid_data)))
+    print("Test: {} examples".format(len(test_data)))
+
+    # Wrap in DataLoader objects with batch size and shuffling preference
+    train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(dataset=valid_data, batch_size=batch_size, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False) 
+
+    # Check number of batches
+    print("Train: {} batches".format(len(train_loader)))
+    print("Valid: {} batches".format(len(valid_loader))) 
+    print("Test: {} batches".format(len(test_loader))) 
+
+    model = Model(CNN_layers, Deep_layers, dropout=dropout)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('Shrink Larger Samples Model Training Losses')
+    plt.legend()
+    plt.savefig('Shrink Larger Samples model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Shrink Larger Samples Model Training Accuracies')
+    plt.legend()
+    plt.savefig('Shrink Larger Samples model acc.png')
+    plt.close()
+
+
+    # Duplicate Smaller Samples model *********
+    train_data = Dataset("dataset/seg_train", transform_type='train', copy_amount=0, preload=False, data_amount=1-val_size, img_resolution= resize_resolution, duplicate_smaller_samples=True, shrink_larger_samples=False)
+    valid_data = Dataset("dataset/seg_train", transform_type='eval', use_data='last', data_amount=val_size, img_resolution= resize_resolution, preload=True)
+    test_data = Dataset("dataset/seg_test", transform_type='eval', img_resolution= resize_resolution, preload=True)
+
+    # Check our dataset sizes
+    print("Train: {} examples".format(len(train_data)))
+    print("Valid: {} examples".format(len(valid_data)))
+    print("Test: {} examples".format(len(test_data)))
+
+    # Wrap in DataLoader objects with batch size and shuffling preference
+    train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(dataset=valid_data, batch_size=batch_size, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False) 
+
+    # Check number of batches
+    print("Train: {} batches".format(len(train_loader)))
+    print("Valid: {} batches".format(len(valid_loader))) 
+    print("Test: {} batches".format(len(test_loader))) 
+
+    model = Model(CNN_layers, Deep_layers, dropout=dropout)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('Duplicate Smaller Samples Model Training Losses')
+    plt.legend()
+    plt.savefig('Duplicate Smaller Samples model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Duplicate Smaller Samples Model Training Accuracies')
+    plt.legend()
+    plt.savefig('Duplicate Smaller Samples model acc.png')
+    plt.close()
+
+
+    # Higher Learning Rate ****
+    print("Fetching data...") #webcrawlerDataFolder='dataset/web_crawled,'
+    train_data = Dataset("dataset/seg_train", transform_type='train', copy_amount=0, preload=False, data_amount=1-val_size, img_resolution= resize_resolution, duplicate_smaller_samples=False, shrink_larger_samples=False)
+    valid_data = Dataset("dataset/seg_train", transform_type='eval', use_data='last', data_amount=val_size, img_resolution= resize_resolution, preload=True)
+    test_data = Dataset("dataset/seg_test", transform_type='eval', img_resolution= resize_resolution, preload=True)
+
+    # Wrap in DataLoader objects with batch size and shuffling preference
+    train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(dataset=valid_data, batch_size=batch_size, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False) 
+
+    model = Model(CNN_layers, Deep_layers, dropout=dropout)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=0.1, weight_decay=weight_decay)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('High Learning Rate (0.1) Model Training Losses')
+    plt.legend()
+    plt.savefig('High Learning Rate (0.1) model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('High Learning Rate (0.1) Model Training Accuracies')
+    plt.legend()
+    plt.savefig('High Learning Rate (0.1) model acc.png')
+    plt.close()
+
+
+     # Lower Learning Rate ****
+    model = Model(CNN_layers, Deep_layers, dropout=dropout)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=1e-5, weight_decay=weight_decay)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('Low Learning Rate (1e-5) Model Training Losses')
+    plt.legend()
+    plt.savefig('Low Learning Rate (1e-5) model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Low Learning Rate (1e-5) Model Training Accuracies')
+    plt.legend()
+    plt.savefig('Low Learning Rate (1e-5) model acc.png')
+    plt.close()
+ 
 

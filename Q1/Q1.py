@@ -9,7 +9,7 @@ import time
 from PIL import Image, ImageFile
 from torchvision.io import read_image, ImageReadMode
 from torchvision import transforms
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, accuracy_score
 import matplotlib.pyplot as plt
 import seaborn as sns
 

@@ -24,7 +24,7 @@ loss_fn = torch.nn.CrossEntropyLoss()
 model = resnet50()
 num_ftrs = model.fc.in_features
 model.fc = torch.nn.Linear(num_ftrs, 6)
-model.load_state_dict(torch.load('model-85.97%-acc'))
+model.load_state_dict(torch.load('model-93.32%-acc'))
 model = model.to(device)
 model.eval()
 

@@ -1,0 +1,10 @@
+Simply place the inference script and the model "model" into the folder.
+Alternatively, the script and model can be placed elsewhere
+
+python library requirements:
+- os
+- glob
+- numpy
+- pandas
+- torch
+- torchvison
