@@ -76,6 +76,7 @@ class Dataset(torch.utils.data.Dataset):
         class_num = 0
         self.labels = np.empty((0,1))
         self.image_paths = np.empty((0,1))
+        print("Found folders for", os.listdir(data_folder))
         for dir in os.listdir(data_folder):
             class_folder = data_folder + "/" + dir
             image_paths = glob.glob(os.path.join(class_folder, '*.jpg'))
@@ -115,7 +116,7 @@ class Dataset(torch.utils.data.Dataset):
                     
             self.image_paths = np.append(self.image_paths, image_paths) # ideally np.append/np.concat is not used as it will need to re-allocate memory each call, but this only happens 5 times?..
             
-            temp_labels = np.full((len(self.image_paths), 1), class_num)
+            temp_labels = np.full((len(image_paths), 1), class_num)
             self.labels = np.append(self.labels, temp_labels) # similarly..
 
             class_num += 1
@@ -142,6 +143,7 @@ class Dataset(torch.utils.data.Dataset):
             transforms.RandomRotation(45),
             transforms.RandomGrayscale(),
             transforms.RandomPerspective(),
+            transforms.RandomErasing()
             #transforms.ToTensor(), # already a tensor
             #transforms.Normalize( mean = (0,0,0), std = (1,1,1)), #ToTensor already normalizes
         )
@@ -159,6 +161,7 @@ class Dataset(torch.utils.data.Dataset):
             self.images = np.empty((self.n, 3, img_resolution, img_resolution)) # n_items, n_channels (RGB), img width, img height
             for i in range(self.n):
                 #img = Image.open(self.image_paths[i]).convert('RGB') #.convert RGB forces images with alpha channel into 3 RGB channels
+                #print(self.image_paths[i])
                 img = read_image(str(self.image_paths[i]), ImageReadMode.RGB)
                 #img = self.resize_transform(img).type(torch.FloatTensor).to(device)
                 #img = self.transform(img).cpu()
