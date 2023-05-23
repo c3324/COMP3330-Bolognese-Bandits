@@ -6,16 +6,19 @@ import numpy as np
 import os
 import glob
 import time
-from PIL import Image, ImageFile
+from PIL import Image, ImageFile 
 from torchvision.io import read_image, ImageReadMode
 from torchvision import transforms
 from sklearn.metrics import confusion_matrix, accuracy_score
 import matplotlib.pyplot as plt
 import seaborn as sns
+import os
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
 # Check which device is available
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('Using {}'.format(device))
+    
 
 #ImageFile Fix
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -23,10 +26,10 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 ### Parameters ###########################
 batch_size = 128
 resize_resolution = 128
-epochs = 50
+epochs = 10
 learning_rate = 1e-3
 val_size = 0.1
-weight_decay = 0 #0.01 #L2 regularization
+weight_decay = 0 #L2 regularization
 
 CNN_layers = [16, 32, 32, 64, 64, 128]
 Deep_layers = [256, 128]
@@ -211,6 +214,7 @@ class Dataset(torch.utils.data.Dataset):
             return self.images[idx], label
             
     
+    
 
 
 # class Model(torch.nn.Module):
@@ -370,52 +374,7 @@ def init_weights(m):
     if type(m) == torch.nn.Linear or type(m) == torch.nn.Conv2d:
         torch.nn.init.xavier_normal_(m.weight)
 
-
-if __name__ == '__main__':
-
-    
-    # Create our dataset splits
-    print("Fetching data...") #webcrawlerDataFolder='dataset/web_crawled,'
-    train_data = Dataset("dataset/seg_train", transform_type='train', data_amount=1, copy_amount=0, preload=False, img_resolution= resize_resolution, duplicate_smaller_samples=False, shrink_larger_samples=False)
-    #valid_data = Dataset("dataset/seg_train", webcrawlerDataFolder='dataset/web_crawled', transform=eval_transforms, use_data='last', data_amount=val_size, img_resolution= resize_resolution, preload=True)
-    test_data = Dataset("dataset/seg_test", transform_type='eval', img_resolution= resize_resolution, preload=True)
-
-
-    # Check our dataset sizes
-    print("Train: {} examples".format(len(train_data)))
-    #print("Valid: {} examples".format(len(valid_data)))
-    print("Test: {} examples".format(len(test_data)))
-
-
-    # Wrap in DataLoader objects with batch size and shuffling preference
-    train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
-    #valid_loader = torch.utils.data.DataLoader(dataset=valid_data, batch_size=batch_size, shuffle=False)
-    #test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False)
-    test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False) # swapped to inspect...
-    valid_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False)
-
-
-    # Check number of batches
-    print("Train: {} batches".format(len(train_loader)))
-    print("Valid: {} batches".format(len(valid_loader))) 
-    print("Test: {} batches".format(len(test_loader))) 
-
-    # Create an object from the model
-    model = Model(CNN_layers, Deep_layers, dropout=dropout)
-    model.apply(init_weights)
-    model.to(device)
-
-
-    # Set loss function and optimizer
-    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    loss_fn = torch.nn.CrossEntropyLoss()
-
-    print("Begining training...")
-    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
-    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
-
-    
-
+def eval(model):
     test_accuracy, test_loss = 0, 0
     preds = []
     labels = []
@@ -437,44 +396,384 @@ if __name__ == '__main__':
             preds.append(test_output_i.argmax(dim=1))
             labels.append(label)
 
+
+    return test_loss, test_accuracy
+
+
+
+if __name__ == '__main__':
+
+    # Check which device is available
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print('Using {}'.format(device))
+    
+    # Create our dataset splits
+    print("Fetching data...") #webcrawlerDataFolder='dataset/web_crawled,'
+    train_data = Dataset("dataset/seg_train", transform_type='train', copy_amount=0, preload=False, data_amount=1-val_size, img_resolution= resize_resolution, duplicate_smaller_samples=False, shrink_larger_samples=False)
+    valid_data = Dataset("dataset/seg_train", transform_type='eval', use_data='last', data_amount=val_size, img_resolution= resize_resolution, preload=True)
+    test_data = Dataset("dataset/seg_test", transform_type='eval', img_resolution= resize_resolution, preload=True)
+
+
+    # Check our dataset sizes
+    print("Train: {} examples".format(len(train_data)))
+    print("Valid: {} examples".format(len(valid_data)))
+    print("Test: {} examples".format(len(test_data)))
+
+    # Wrap in DataLoader objects with batch size and shuffling preference
+    train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(dataset=valid_data, batch_size=batch_size, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False) 
+
+    # Check number of batches
+    print("Train: {} batches".format(len(train_loader)))
+    print("Valid: {} batches".format(len(valid_loader))) 
+    print("Test: {} batches".format(len(test_loader))) 
+
+
+    # control model ************
+    model = Model(CNN_layers, Deep_layers, dropout=dropout)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
     print("Test loss: {:.4f}".format(test_loss))
     print("Test accuracy: {:.2f}%".format(test_accuracy*100))
-
 
     plt.plot(train_losses, label='train loss')
     plt.plot(val_losses, label='validated loss')
     plt.xlabel('epoch')
     plt.ylabel('loss')
-    plt.title('Training Losses')
+    plt.title('Control Model Training Losses')
     plt.legend()
-    plt.show()
+    plt.savefig('Control model loss.png')
+    plt.close()
 
     plt.plot(train_accs, label='train accuracy')
     plt.plot(val_accs, label='validated accuracy')
     plt.xlabel('epoch')
     plt.ylabel('Accuracy')
-    plt.title('Training Accuracies')
+    plt.title('Control Model Training Accuracies')
     plt.legend()
-    plt.show()
-    
-    y_pred_test = np.argmax(model.predict(data.get_data('X_test')), axis=1)
-    y_test = np.argmax(data.get_data('y_test'), axis=1)
-    #print(y_pred_test, y_test)
-    confusion_mat = confusion_matrix(y_test, y_pred_test)
-    accuracy = accuracy_score(y_pred_test, y_test)
-    print("Accuracy of {:.2f}% ".format(accuracy*100))
+    plt.savefig('Control model acc.png')
+    plt.close()
 
-    # Confusion matrix
-    classes = data.get_classes()
-    #print(classes)
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(confusion_mat/864,
-                cmap='Blues',
-                xticklabels=classes,
-                yticklabels=classes,
-                annot=True,
-                fmt='.2%'
-                )
-    plt.xlabel('Prediction')
-    plt.ylabel('Label')
-    plt.show()
+
+    # batch size 1 model *********
+    train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=1, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(dataset=valid_data, batch_size=1, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=1, shuffle=False) 
+
+    # Check number of batches
+    print("Train: {} batches".format(len(train_loader)))
+    print("Valid: {} batches".format(len(valid_loader))) 
+    print("Test: {} batches".format(len(test_loader))) 
+
+
+    model = Model(CNN_layers, Deep_layers, dropout=dropout)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('Batchsize of 1 Model Training Losses')
+    plt.legend()
+    plt.savefig('batchsize of 1 model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Batchsize of 1 Model Training Accuracies')
+    plt.legend()
+    plt.savefig('batchsize of 1 model acc.png')
+    plt.close()
+
+    # Dropout model *********
+    train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(dataset=valid_data, batch_size=batch_size, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False) 
+
+    # Check number of batches
+    print("Train: {} batches".format(len(train_loader)))
+    print("Valid: {} batches".format(len(valid_loader))) 
+    print("Test: {} batches".format(len(test_loader))) 
+
+    model = Model(CNN_layers, Deep_layers, dropout=0.3)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('Dropout Model Training Losses')
+    plt.legend()
+    plt.savefig('Dropout model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Dropout Model Training Accuracies')
+    plt.legend()
+    plt.savefig('Dropout model acc.png')
+    plt.close()
+
+
+    # L2 model *********
+
+    model = Model(CNN_layers, Deep_layers, dropout=dropout)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=0.1)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('Weight Decay Model Training Losses')
+    plt.legend()
+    plt.savefig('Weight Decay  model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Weight Decay  Model Training Accuracies')
+    plt.legend()
+    plt.savefig('Weight Decay  model acc.png')
+    plt.close()
+
+
+    # Drop Extra Samples model *********
+    train_data = Dataset("dataset/seg_train", transform_type='train', copy_amount=0, preload=False, data_amount=1-val_size, img_resolution= resize_resolution, duplicate_smaller_samples=False, shrink_larger_samples=True)
+    valid_data = Dataset("dataset/seg_train", transform_type='eval', use_data='last', data_amount=val_size, img_resolution= resize_resolution, preload=True)
+    test_data = Dataset("dataset/seg_test", transform_type='eval', img_resolution= resize_resolution, preload=True)
+
+    # Check our dataset sizes
+    print("Train: {} examples".format(len(train_data)))
+    print("Valid: {} examples".format(len(valid_data)))
+    print("Test: {} examples".format(len(test_data)))
+
+    # Wrap in DataLoader objects with batch size and shuffling preference
+    train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(dataset=valid_data, batch_size=batch_size, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False) 
+
+    # Check number of batches
+    print("Train: {} batches".format(len(train_loader)))
+    print("Valid: {} batches".format(len(valid_loader))) 
+    print("Test: {} batches".format(len(test_loader))) 
+
+    model = Model(CNN_layers, Deep_layers, dropout=dropout)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('Shrink Larger Samples Model Training Losses')
+    plt.legend()
+    plt.savefig('Shrink Larger Samples model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Shrink Larger Samples Model Training Accuracies')
+    plt.legend()
+    plt.savefig('Shrink Larger Samples model acc.png')
+    plt.close()
+
+
+    # Duplicate Smaller Samples model *********
+    train_data = Dataset("dataset/seg_train", transform_type='train', copy_amount=0, preload=False, data_amount=1-val_size, img_resolution= resize_resolution, duplicate_smaller_samples=True, shrink_larger_samples=False)
+    valid_data = Dataset("dataset/seg_train", transform_type='eval', use_data='last', data_amount=val_size, img_resolution= resize_resolution, preload=True)
+    test_data = Dataset("dataset/seg_test", transform_type='eval', img_resolution= resize_resolution, preload=True)
+
+    # Check our dataset sizes
+    print("Train: {} examples".format(len(train_data)))
+    print("Valid: {} examples".format(len(valid_data)))
+    print("Test: {} examples".format(len(test_data)))
+
+    # Wrap in DataLoader objects with batch size and shuffling preference
+    train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(dataset=valid_data, batch_size=batch_size, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False) 
+
+    # Check number of batches
+    print("Train: {} batches".format(len(train_loader)))
+    print("Valid: {} batches".format(len(valid_loader))) 
+    print("Test: {} batches".format(len(test_loader))) 
+
+    model = Model(CNN_layers, Deep_layers, dropout=dropout)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('Duplicate Smaller Samples Model Training Losses')
+    plt.legend()
+    plt.savefig('Duplicate Smaller Samples model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Duplicate Smaller Samples Model Training Accuracies')
+    plt.legend()
+    plt.savefig('Duplicate Smaller Samples model acc.png')
+    plt.close()
+
+
+    # Higher Learning Rate ****
+    print("Fetching data...") #webcrawlerDataFolder='dataset/web_crawled,'
+    train_data = Dataset("dataset/seg_train", transform_type='train', copy_amount=0, preload=False, data_amount=1-val_size, img_resolution= resize_resolution, duplicate_smaller_samples=False, shrink_larger_samples=False)
+    valid_data = Dataset("dataset/seg_train", transform_type='eval', use_data='last', data_amount=val_size, img_resolution= resize_resolution, preload=True)
+    test_data = Dataset("dataset/seg_test", transform_type='eval', img_resolution= resize_resolution, preload=True)
+
+    # Wrap in DataLoader objects with batch size and shuffling preference
+    train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(dataset=valid_data, batch_size=batch_size, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False) 
+
+    model = Model(CNN_layers, Deep_layers, dropout=dropout)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=0.1, weight_decay=weight_decay)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('High Learning Rate (0.1) Model Training Losses')
+    plt.legend()
+    plt.savefig('High Learning Rate (0.1) model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('High Learning Rate (0.1) Model Training Accuracies')
+    plt.legend()
+    plt.savefig('High Learning Rate (0.1) model acc.png')
+    plt.close()
+
+
+     # Lower Learning Rate ****
+    model = Model(CNN_layers, Deep_layers, dropout=dropout)
+    model.apply(init_weights)
+    model.to(device)
+
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=1e-5, weight_decay=weight_decay)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    print("Begining training Model...")
+    model_trainer = trainer(model, train_loader, valid_loader, epochs, optimizer, device, loss_fn)
+    train_losses, val_losses, train_accs, val_accs = model_trainer.train()
+    test_loss, test_accuracy = eval(model)
+
+    print("Test loss: {:.4f}".format(test_loss))
+    print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
+    plt.plot(train_losses, label='train loss')
+    plt.plot(val_losses, label='validated loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.title('Low Learning Rate (1e-5) Model Training Losses')
+    plt.legend()
+    plt.savefig('Low Learning Rate (1e-5) model loss.png')
+    plt.close()
+
+    plt.plot(train_accs, label='train accuracy')
+    plt.plot(val_accs, label='validated accuracy')
+    plt.xlabel('epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Low Learning Rate (1e-5) Model Training Accuracies')
+    plt.legend()
+    plt.savefig('Low Learning Rate (1e-5) model acc.png')
+    plt.close()
+ 
+
