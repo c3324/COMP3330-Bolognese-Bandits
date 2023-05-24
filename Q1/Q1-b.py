@@ -15,10 +15,7 @@ import seaborn as sns
 import os
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
-# Check which device is available
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print('Using {}'.format(device))
-    
+
 
 #ImageFile Fix
 ImageFile.LOAD_TRUNCATED_IMAGES = True
