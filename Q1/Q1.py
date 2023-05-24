@@ -206,3 +206,4 @@ with torch.no_grad():
 
 print("Test loss: {:.4f}".format(test_loss))
 print("Test accuracy: {:.2f}%".format(test_accuracy*100))
+
