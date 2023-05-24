@@ -1,7 +1,7 @@
 
 
 from torchvision.models.quantization import resnet50, ResNet50_QuantizedWeights
-from torchvision.models import resnet50, ResNet50_Weights
+from torchvision.models import densenet201, resnet50, ResNet50_Weights
 from torchvision import transforms
 from torchvision.io import read_image, ImageReadMode
 
@@ -21,7 +21,7 @@ loss_fn = torch.nn.CrossEntropyLoss()
 model = resnet50()
 num_ftrs = model.fc.in_features
 model.fc = torch.nn.Linear(num_ftrs, 6)
-model.load_state_dict(torch.load('model-93.22%-acc'))
+model.load_state_dict(torch.load('model-92.54%-acc'))
 model = model.to(device)
 model.eval()
 
@@ -44,7 +44,7 @@ class Dataset(torch.utils.data.Dataset):
 
         self.labels = np.empty((0,1))
         self.image_paths = np.empty((0,1))
-        class_folder = ''
+        class_folder = 'dataset'
         print("Found files for", os.listdir(class_folder))
         
         image_paths = glob.glob(os.path.join(class_folder, '*.jpg'))
@@ -113,7 +113,7 @@ with torch.no_grad():
         output = model(data)
         
         preds += output.argmax(dim=1).cpu().numpy().tolist()
-        paths += path
+        paths += (path[0].split("/")[-1],)
         
 df = pd.DataFrame(paths)
 df.columns = ['image filename']
