@@ -37,9 +37,22 @@ weight_decay = 0 #0.01 #L2 regularization
 # model.fc = torch.nn.Linear(model.fc.in_features, 6)
 # model = model.to(device)
 
-weights = DenseNet201_Weights.DEFAULT
-model = densenet201(weights = weights)
-model.classifier = torch.nn.Linear(model.classifier.in_features, 6)
+# weights = DenseNet201_Weights.DEFAULT
+# model = densenet201(weights = weights)
+# model.classifier = torch.nn.Linear(model.classifier.in_features, 6)
+# model = model.to(device)
+
+weights = VGG16_Weights.DEFAULT
+model = vgg16(weights = weights)
+model.classifier = torch.nn.Sequential(
+	torch.nn.Linear(in_features=25088, out_features=4096, bias=True),
+	torch.nn.ReLU(inplace=True),
+	torch.nn.Dropout(p=0.5, inplace=False),
+	torch.nn.Linear(in_features=4096, out_features=4096, bias=True),
+	torch.nn.ReLU(inplace=True),
+	torch.nn.Dropout(p=0.5, inplace=False),
+	torch.nn.Linear(in_features=4096, out_features=6, bias=True)
+)
 model = model.to(device)
 
 # Initialize the inference transforms
