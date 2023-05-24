@@ -4,7 +4,13 @@ import torch.nn as nn
 import torchtext
 import datasets
 
-device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+# Check which device is available
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+print('Using {}'.format(device))
+
+# Params
+epochs = 100
+learning_rate = 1e-4
 
 # The dataset has a predefined train (25,000 examples) and test (25,000 examples) split
 train_data, test_data = datasets.load_dataset("cardiffnlp/tweet_topic_single", split=["train_coling2022", "test_coling2022"])
@@ -14,7 +20,6 @@ train_data = train_valid_data['train']
 valid_data = train_valid_data['test']
 # Preview our splits
 train_data, valid_data, test_data
-
 
 tokenizer = torchtext.data.utils.get_tokenizer("basic_english")
 max_length = 600
@@ -31,7 +36,6 @@ vocab = torchtext.vocab.build_vocab_from_iterator(train_data['tokens'],
                                                   min_freq=5,
                                                   specials=['<unk>', '<pad>'])
 vocab.set_default_index(vocab['<unk>'])
-pad_index = vocab['<pad>']
 
 def numericalize_data(example, vocab):
     ids = [vocab[token] for token in example['tokens']]
@@ -41,81 +45,51 @@ train_data = train_data.map(numericalize_data, fn_kwargs={'vocab': vocab})
 valid_data = valid_data.map(numericalize_data, fn_kwargs={'vocab': vocab})
 test_data = test_data.map(numericalize_data, fn_kwargs={'vocab': vocab})
 
-train_data = train_data.with_format(type='torch', columns=['ids', 'label'])
-valid_data = valid_data.with_format(type='torch', columns=['ids', 'label'])
-test_data = test_data.with_format(type='torch', columns=['ids', 'label'])
 
-def collate(batch):
-    batch_ids = [i['ids'] for i in batch]
-    batch_ids = nn.utils.rnn.pad_sequence(batch_ids, padding_value=pad_index, batch_first=True)
-    batch_label = [i['label'] for i in batch]
-    batch_label = torch.stack(batch_label)
-    batch = {'ids': batch_ids,
-             'label': batch_label}
-    return batch
+def multi_hot_data(example, num_classes):
+    encoded = np.zeros((num_classes,))
+    encoded[example['ids']] = 1 
+    return {'multi_hot': encoded}
+
+train_data = train_data.map(multi_hot_data, fn_kwargs={'num_classes': len(vocab)})
+valid_data = valid_data.map(multi_hot_data, fn_kwargs={'num_classes': len(vocab)})
+test_data = test_data.map(multi_hot_data, fn_kwargs={'num_classes': len(vocab)})
+
+train_data = train_data.with_format(type='torch', columns=['multi_hot', 'label'])
+valid_data = valid_data.with_format(type='torch', columns=['multi_hot', 'label'])
+test_data = test_data.with_format(type='torch', columns=['multi_hot', 'label'])
+
+train_dataloader = torch.utils.data.DataLoader(train_data, batch_size=128, shuffle=True)
+valid_dataloader = torch.utils.data.DataLoader(valid_data, batch_size=128)
+test_dataloader = torch.utils.data.DataLoader(test_data, batch_size=128)
 
 
-train_dataloader = torch.utils.data.DataLoader(train_data, batch_size=128, collate_fn=collate, shuffle=True)
-valid_dataloader = torch.utils.data.DataLoader(valid_data, batch_size=128, collate_fn=collate)
-test_dataloader = torch.utils.data.DataLoader(test_data, batch_size=128, collate_fn=collate)
-
-
-class EncoderBlock(nn.Module):
-    def __init__(self, n_embed, n_head):
+class BoW(nn.Module):
+    def __init__(self, vocab_size):
         super().__init__()
-        self.sa = nn.MultiheadAttention(
-            embed_dim=n_embed, num_heads=n_head)
-        self.ffwd = nn.Sequential(
-            nn.Linear(n_embed, 2*n_embed),
-            nn.ReLU(),
-            nn.Linear(2*n_embed, n_embed),
-        )
-        self.ln1 = nn.LayerNorm(n_embed)
-        self.ln2 = nn.LayerNorm(n_embed)        
+        self.hidden1 = nn.Linear(vocab_size, 64)
+        self.hidden2 = nn.Linear(64, 32)
+        self.hidden3 = nn.Linear(32, 16)
+        self.out = nn.Linear(16, 6)
     def forward(self, x):
-        x = x + self.sa(x, x, x)[0]
-        x = self.ln1(x)
-        x = x + self.ffwd(x)
-        x = self.ln2(x)
-        return x
-    
-    
-class Transformer(nn.Module):
-    def __init__(self, vocab_size, n_embed, n_layer, n_head):
-        super().__init__()
-        self.token_embedding = nn.Embedding(
-            num_embeddings=vocab_size, embedding_dim=n_embed, padding_idx=pad_index)
-        self.position_embedding = nn.Embedding(
-            num_embeddings=max_length, embedding_dim=n_embed)
-        self.blocks = nn.Sequential(*[EncoderBlock(n_embed=n_embed, n_head=n_head) for _ in range(n_layer)])
-        self.ln = nn.LayerNorm(n_embed)
-        self.out = nn.Linear(n_embed, 2)
-    def forward(self, x):
-        B, T = x.shape
-        tok_emb = self.token_embedding(x) # (B, T, C)
-        pos_emb = self.position_embedding(torch.arange(T, device=device)) # (T, C)
-        x = tok_emb + pos_emb # (B, T, C)
-        x = self.blocks(x) # (B, T, C)
-        x = self.ln(x) # (B, T, C)
-        x = torch.amax(x, dim=1) # Reduce sequence dim (B, C)
+        x = nn.ReLU()(self.hidden1(x))
+        x = nn.ReLU()(self.hidden2(x))
+        x = nn.ReLU()(self.hidden3(x))
         x = self.out(x)
         return x
 
-# Instantiate a small Transformer model with 1 block and 2 heads
-model = Transformer(vocab_size=len(vocab), n_embed=64, n_layer=1, n_head=2).to(device)
+# Instantiate the Model
+model = BoW(vocab_size=len(vocab)).to(device)
 
 # Define the optimiser and tell it what parameters to update, as well as the loss function
-optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 loss_fn = nn.CrossEntropyLoss().to(device)
-
-print(model)
-
 
 def train(model, dataloader, loss_fn, optimizer, device):
     model.train()
     losses, accuracies = [], []
     for batch in dataloader:
-        inputs = batch['ids'].to(device)
+        inputs = batch['multi_hot'].to(device)
         labels = batch['label'].to(device)
         # Reset the gradients for all variables
         optimizer.zero_grad()
@@ -138,7 +112,7 @@ def evaluate(model, dataloader, loss_fn, device):
     losses, accuracies = [], []
     with torch.no_grad():
         for batch in dataloader:
-            inputs = batch['ids'].to(device)
+            inputs = batch['multi_hot'].to(device)
             labels = batch['label'].to(device)
             # Forward pass
             preds = model(inputs)
@@ -146,13 +120,14 @@ def evaluate(model, dataloader, loss_fn, device):
             loss = loss_fn(preds, labels)
             # Log
             losses.append(loss.detach().cpu().numpy())
-            accuracy = torch.sum(torch.argmax(preds, dim=-1) == labels) / labels.shape[0]
-            accuracies.append(accuracy.detach().cpu().numpy())
+        accuracy = torch.sum(torch.argmax(preds, dim=-1) == labels) / labels.shape[0]
+        accuracies.append(accuracy.detach().cpu().numpy())
     return np.mean(losses), np.mean(accuracies)
+
 
 train_losses, train_accuracies = [], []
 valid_losses, valid_accuracies = [], []
-for epoch in range(10):
+for epoch in range(epochs):
     # Train
     train_loss, train_accuracy = train(model, train_dataloader, loss_fn, optimizer, device)
     # Evaluate
@@ -165,7 +140,6 @@ for epoch in range(10):
     print("Epoch {}: train_loss={:.4f}, train_accuracy={:.4f}, valid_loss={:.4f}, valid_accuracy={:.4f}".format(
         epoch+1, train_loss, train_accuracy, valid_loss, valid_accuracy))
     
-
 import matplotlib.pyplot as plt
 fig, (ax1, ax2) = plt.subplots(2, figsize=(12, 8), sharex=True)
 ax1.plot(train_losses, color='b', label='train')
@@ -177,7 +151,7 @@ ax2.plot(valid_accuracies, color='r', label='valid')
 ax2.set_ylabel("Accuracy")
 ax2.set_xlabel("Epoch")
 ax2.legend()
-fig.show()
+plt.show()
 
 test_loss, test_accuracy = evaluate(model, test_dataloader, loss_fn, device)
 print("Test loss: {:.4f}".format(test_loss))
