@@ -5,8 +5,8 @@ import torch.optim as optim
 from Encoder import EncoderBlock
 
 HIDDEN_SIZE = 32
-EMBEDDING_SIZE = 128
-ENCODING_COUNT = 16
+EMBEDDING_SIZE = 4
+ENCODING_COUNT = 2
 MAX_LEN = 600
 HEADS = 2
 
@@ -58,7 +58,7 @@ class ExtraEmbedding(nn.Module):
         return x
 
 class Dropout(nn.Module):
-    def __init__(self, vocab, n_head):
+    def __init__(self, vocab):
         super().__init__()
         self.token_embedding = nn.Embedding(
             num_embeddings=len(vocab), embedding_dim=EMBEDDING_SIZE, padding_idx=vocab['<pad>'])
@@ -88,7 +88,7 @@ class ExtraHeads(nn.Module):
             num_embeddings=len(vocab), embedding_dim=EMBEDDING_SIZE, padding_idx=vocab['<pad>'])
         self.position_embedding = nn.Embedding(
             num_embeddings=MAX_LEN, embedding_dim=EMBEDDING_SIZE)
-        self.blocks = nn.Sequential(*[EncoderBlock(n_embed=EMBEDDING_SIZE, n_head=HEADS*5) for _ in range(ENCODING_COUNT)])
+        self.blocks = nn.Sequential(*[EncoderBlock(n_embed=EMBEDDING_SIZE, n_head=HEADS*2) for _ in range(ENCODING_COUNT)])
         self.ln = nn.LayerNorm(EMBEDDING_SIZE)
         self.out = nn.Linear(EMBEDDING_SIZE, 6)
     def forward(self, x):

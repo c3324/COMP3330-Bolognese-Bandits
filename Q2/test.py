@@ -91,6 +91,7 @@ class Transformer(nn.Module):
         self.ln = nn.LayerNorm(n_embed)
         self.out = nn.Linear(n_embed, 6)
     def forward(self, x):
+        print(x.shape)
         B, T = x.shape
         tok_emb = self.token_embedding(x) # (B, T, C)
         pos_emb = self.position_embedding(torch.arange(T, device=device)) # (T, C)
