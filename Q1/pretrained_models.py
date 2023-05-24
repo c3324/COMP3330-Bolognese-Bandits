@@ -24,7 +24,7 @@ print('Using {}'.format(device))
 ### Parameters ###########################
 batch_size = 64
 resize_resolution = 128
-epochs = 35
+epochs = 10
 learning_rate = 1e-5
 val_size = 0.1
 weight_decay = 0 #0.01 #L2 regularization
