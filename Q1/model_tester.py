@@ -48,26 +48,26 @@ accuracy, loss = 0, 0
 #model.eval()
 # Disable gradients
 with torch.no_grad():
-    # Iterate through batches
-    preds = []
-    y_test = []
-    for data, label in test_loader:
-        # Move data to the used device
-        label = label.type(torch.LongTensor) # move to outside of training loop for efficiency..
-        data = data.type(torch.FloatTensor)
-        data = data.to(device)
-        label = label.to(device)
-        # Forward pass
-        output = model(data)
-        batch_loss = loss_fn(output, label)
-        # Compute metrics
-        acc = ((output.argmax(dim=1) == label).float().mean())
-        accuracy += acc/len(test_loader)
-        loss += batch_loss/len(test_loader) 
-        
-        preds += output.argmax(dim=1).cpu().numpy().tolist()
-        y_test += label.cpu().numpy().tolist()
-        print(label)
+	# Iterate through batches
+	preds = []
+	y_test = []
+	for data, label in test_loader:
+		# Move data to the used device
+		label = label.type(torch.LongTensor) # move to outside of training loop for efficiency..
+		data = data.type(torch.FloatTensor)
+		data = data.to(device)
+		label = label.to(device)
+		# Forward pass
+		output = model(data)
+		batch_loss = loss_fn(output, label)
+		# Compute metrics
+		acc = ((output.argmax(dim=1) == label).float().mean())
+		accuracy += acc/len(test_loader)
+		loss += batch_loss/len(test_loader) 
+		
+		preds += output.argmax(dim=1).cpu().numpy().tolist()
+		y_test += label.cpu().numpy().tolist()
+		print(label)
 
 #print(y_test)
 y_test = np.array(y_test).flatten()

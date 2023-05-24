@@ -68,20 +68,20 @@ accuracy, loss = 0, 0
 model.eval()
 # Disable gradients
 with torch.no_grad():
-    # Iterate through batches
-    for data, label in valid_loader:
-        # Move data to the used device
-        label = label.type(torch.LongTensor) # move to outside of training loop for efficiency..
-        data = data.type(torch.FloatTensor)
-        data = data.to(device)
-        label = label.to(device)
-        # Forward pass
-        valid_output = model(data)
-        valid_loss = loss_fn(valid_output, label)
-        # Compute metrics
-        acc = ((valid_output.argmax(dim=1) == label).float().mean())
-        accuracy += acc/len(valid_loader)
-        loss += valid_loss/len(valid_loader) 
+	# Iterate through batches
+	for data, label in valid_loader:
+		# Move data to the used device
+		label = label.type(torch.LongTensor) # move to outside of training loop for efficiency..
+		data = data.type(torch.FloatTensor)
+		data = data.to(device)
+		label = label.to(device)
+		# Forward pass
+		valid_output = model(data)
+		valid_loss = loss_fn(valid_output, label)
+		# Compute metrics
+		acc = ((valid_output.argmax(dim=1) == label).float().mean())
+		accuracy += acc/len(valid_loader)
+		loss += valid_loss/len(valid_loader) 
 
 print('Initial Pretrained model Accuracy:   {:.2f}%,   Loss: {:.4f}   |   {:.2f}s'.format(accuracy*100, loss, time.time()-val_start_time))
 
