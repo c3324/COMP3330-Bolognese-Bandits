@@ -18,10 +18,10 @@ print('Using {}'.format(device))
 loss_fn = torch.nn.CrossEntropyLoss()
 
 
-model = densenet201()
-num_ftrs = model.classifier.in_features
-model.classifier = torch.nn.Linear(num_ftrs, 6)
-model.load_state_dict(torch.load('model-92.54%-acc'))
+model = resnet50()
+num_ftrs = model.fc.in_features
+model.fc = torch.nn.Linear(num_ftrs, 6)
+model.load_state_dict(torch.load('model'))
 model = model.to(device)
 model.eval()
 

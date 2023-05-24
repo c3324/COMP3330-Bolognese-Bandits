@@ -24,7 +24,7 @@ loss_fn = torch.nn.CrossEntropyLoss()
 model = resnet50()
 num_ftrs = model.fc.in_features
 model.fc = torch.nn.Linear(num_ftrs, 6)
-model.load_state_dict(torch.load('model-85.97%-acc'))
+model.load_state_dict(torch.load('best-model'))
 model = model.to(device)
 model.eval()
 
@@ -33,7 +33,7 @@ model.eval()
 print("Loading data...") #webcrawlerDataFolder='dataset/web_crawled',
 #train_data = Dataset("dataset/seg_train", transform_type='train', copy_amount=0, preload=False, img_resolution= resize_resolution, duplicate_smaller_samples=False, shrink_larger_samples=False)
 #valid_data = Dataset("dataset/seg_train", webcrawlerDataFolder='dataset/web_crawled', transform=eval_transforms, use_data='last', data_amount=val_size, img_resolution= resize_resolution, preload=True, shrink_larger_samples=True)
-test_data = Dataset("dataset/seg_test", transform_type='eval', img_resolution= resize_resolution, preload=True)
+test_data = Dataset("dataset/seg_test/seg_test", transform_type='eval', img_resolution= resize_resolution, preload=True)
 
 # Wrap in DataLoader objects with batch size and shuffling preference
 #train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)

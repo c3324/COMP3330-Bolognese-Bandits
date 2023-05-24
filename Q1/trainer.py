@@ -102,7 +102,7 @@ class trainer():
 		print("Best model:   accuracy = {:.2f}%,  loss = {:.5f}".format(best_acc, best_loss))
 		
 		filename = "model-{:.2f}%-acc".format(best_acc*100)
-		torch.save(self.model.state_dict(), filename)
+		#torch.save(self.model.state_dict(), filename)
 		
 		
 		best_acc, best_loss = self.eval(self.model)
