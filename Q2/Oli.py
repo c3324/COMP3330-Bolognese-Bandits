@@ -5,13 +5,15 @@ from torch.utils.data import random_split
 import torch
 from torch import nn
 import torch.optim as opt
-from Q2 import Hidden32
-from Q2 import ExtraLSTMLayers
-from Q2 import Hidden32WithExtraEmbedding
-from Q2 import logSoftMax
-from Q2 import Hidden8_16_8
+import torchtext
+from Transformer import Control
+from Transformer import ExtraEmbedding
+from Transformer import Dropout
+from Transformer import ExtraHeads
+from Transformer import ExtraEncodings
 from Tweet import Tweets
 import matplotlib.pyplot as plt
+import datasets
 
 FIGPATH = 'Q2/figs/'
 def progressBar(iterable, prefix='', suffix='', decimals=1, length=100, fill='█', printEnd="\r"):
@@ -56,12 +58,12 @@ def mainModel(model,modelName, lossFn, Opts, optNames, epochs):
         validLosses = []
         for epoch in progressBar(range(epochs), prefix=modelName + name, suffix='progress', length=50):
             trainLoss, trainAcc = train(
-                trainDataLoader, opt, lossFn, model)
-            validLoss, validAcc = test(validationDataLoader, lossFn, model)
-            trainAccs.append(trainAcc.detach().cpu().numpy())
-            trainLosses.append(trainLoss.detach().cpu().numpy())
-            validAccs.append(validAcc.detach().cpu().numpy())
-            validLosses.append(validLoss.detach().cpu().numpy())
+                train_dataloader, opt, lossFn, model)
+            validLoss, validAcc = test(valid_dataloader, lossFn, model)
+            trainAccs.append(trainAcc)
+            trainLosses.append(trainLoss)
+            validAccs.append(validAcc)
+            validLosses.append(validLoss)
 
         pd.options.display.float_format = '.2f'.format
         df = pd.DataFrame({
@@ -72,7 +74,7 @@ def mainModel(model,modelName, lossFn, Opts, optNames, epochs):
         }, index=range(epochs))
         plotAccuracy(df, epochs, modelName + name)
         plotLoss(df, epochs, modelName + name)
-        testloss, testacc = test(testDataLoader, lossFn, model)
+        testloss, testacc = test(test_dataloader, lossFn, model)
         if bestLoss < 0:
             bestLoss = testloss
             bestacc = testacc
@@ -111,14 +113,12 @@ def plotLoss(df, epochs, name):
 
 
 def train(trainData, opt, lossfn, model):
-    epochloss = 0
-    correct = 0
+    losses, accuracies = [], []
     for batch in trainData:
         opt.zero_grad()
 
-        inputs, labels = batch
-        inputs = inputs.to(device)
-        labels = labels.to(device)
+        inputs = batch['ids'].to(device)
+        labels = batch['label'].to(device)
 
         scores = model(inputs)
         # print(scores)
@@ -133,33 +133,46 @@ def train(trainData, opt, lossfn, model):
 
         # print("===")
         # print(labels.shape)
-        correct += ((scores.argmax(dim=1) ==
-                    labels.argmax(dim=1)).float().mean())
-        # correct += (np.argmax(scores, axis=1) == np.argmax(labels, axis=1))
-        epochloss += loss
+        losses.append(loss.detach().cpu().numpy())
+        accuracy = torch.sum(torch.argmax(scores, dim=-1) == labels) / labels.shape[0]
+        accuracies.append(accuracy.detach().cpu().numpy())
 
-    return epochloss/len(trainData), correct / len(trainData)
+    return np.mean(losses), np.mean(accuracies)
 
 
 def test(data, lossfn, model):
-    epochloss = 0
-    correct = 0
+    losses, accuracies = [], []
     with torch.no_grad():
         for batch in data:
-            inputs, labels = batch
-            inputs = inputs.to(device)
-            labels = labels.to(device)
+            inputs = batch['ids'].to(device)
+            labels = batch['label'].to(device)
 
             scores = model(inputs)
 
             loss = lossfn(scores, labels)
 
-            correct += ((scores.argmax(dim=1) ==
-                        labels.argmax(dim=1)).float().mean())
-            epochloss += loss
+            losses.append(loss.detach().cpu().numpy())
+            accuracy = torch.sum(torch.argmax(scores, dim=-1) == labels) / labels.shape[0]
+            accuracies.append(accuracy.detach().cpu().numpy())
 
-    return epochloss/len(data), correct / len(data)
+    return np.mean(losses), np.mean(accuracies)
 
+def tokenize(example, tokenizer, max_length):
+    tokens = tokenizer(example['text'])[:max_length]
+    return {'tokens': tokens}
+
+def numericalize_data(example, vocab):
+    ids = [vocab[token] for token in example['tokens']]
+    return {'ids': ids}
+
+def collate(batch):
+    batch_ids = [i['ids'] for i in batch]
+    batch_ids = nn.utils.rnn.pad_sequence(batch_ids, padding_value=pad_index, batch_first=True)
+    batch_label = [i['label'] for i in batch]
+    batch_label = torch.stack(batch_label)
+    batch = {'ids': batch_ids,
+             'label': batch_label}
+    return batch
 
 
 # Check which device is available
@@ -168,52 +181,74 @@ print('Using {}'.format(device))
 BATCH_SIZE = 128
 
 
-vocab = {}
-vocab['<PAD>'] = len(vocab)
-trainDataSet, validationDataSet = random_split(Tweets(
-    "Q2/dataset/split_coling2022_random/test_random.single.json", vocab), [0.7, 0.3])
-testDataSet = Tweets(
-    "Q2/dataset/split_coling2022_random/train_random.single.json", vocab)
+train_data, test_data = datasets.load_dataset("cardiffnlp/tweet_topic_single", split=["train_coling2022", "test_coling2022"])
+# Split off 5,000 examples from train_data for validation
+train_valid_data = train_data.train_test_split(test_size=0.1)
+train_data = train_valid_data['train']
+valid_data = train_valid_data['test']
 
-trainDataLoader = DataLoader(trainDataSet, batch_size=BATCH_SIZE, shuffle=True)
-validationDataLoader = DataLoader(
-    validationDataSet, batch_size=BATCH_SIZE)
-testDataLoader = DataLoader(testDataSet, batch_size=BATCH_SIZE)
 
-hidden32 = Hidden32(len(vocab), 6).to(device)
-hidden8_16_8 = Hidden8_16_8(len(vocab), 6).to(device)
-hidden32relu = Hidden32WithExtraEmbedding(len(vocab), 6).to(device)
-extra1Layers = ExtraLSTMLayers(len(vocab), 6, 2).to(device)
-# extra127Layers = ExtraLSTMLayers(len(vocab), 6, ).to(device)
-lsm = logSoftMax(len(vocab), 6).to(device)
+tokenizer = torchtext.data.utils.get_tokenizer("basic_english")
+max_length = 600
 
-mainLoss = nn.CrossEntropyLoss()
-lsmLoss = nn.NLLLoss()
 
-modelLossPairs = [(hidden32, 'hidden32', mainLoss), (hidden8_16_8,'hidden 8 16 8', mainLoss), (hidden32relu,'hidden w relu',
-                                                                   mainLoss), (extra1Layers,'1 extra lstm layer', mainLoss)]
+train_data = train_data.map(tokenize, fn_kwargs={'tokenizer': tokenizer, 'max_length': max_length})
+valid_data = valid_data.map(tokenize, fn_kwargs={'tokenizer': tokenizer, 'max_length': max_length})
+test_data = test_data.map(tokenize, fn_kwargs={'tokenizer': tokenizer, 'max_length': max_length})
+
+vocab = torchtext.vocab.build_vocab_from_iterator(train_data['tokens'],
+                                                  min_freq=5,
+                                                  specials=['<unk>', '<pad>'])
+
+vocab.set_default_index(vocab['<unk>'])
+pad_index = vocab['<pad>']
+
+train_data = train_data.map(numericalize_data, fn_kwargs={'vocab': vocab})
+valid_data = valid_data.map(numericalize_data, fn_kwargs={'vocab': vocab})
+test_data = test_data.map(numericalize_data, fn_kwargs={'vocab': vocab})
+
+train_data = train_data.with_format(type='torch', columns=['ids', 'label'])
+valid_data = valid_data.with_format(type='torch', columns=['ids', 'label'])
+test_data = test_data.with_format(type='torch', columns=['ids', 'label'])
+
+train_dataloader = torch.utils.data.DataLoader(train_data, batch_size=BATCH_SIZE, collate_fn=collate, shuffle=True)
+valid_dataloader = torch.utils.data.DataLoader(valid_data, batch_size=BATCH_SIZE, collate_fn=collate)
+test_dataloader = torch.utils.data.DataLoader(test_data, batch_size=BATCH_SIZE, collate_fn=collate)
+
+
+
+mainLoss = nn.CrossEntropyLoss().to(device=device)
+
+control = Control(vocab).to(device)
+Embeddings = ExtraEmbedding(vocab).to(device)
+drop = Dropout(vocab).to(device)
+heads = ExtraHeads(vocab).to(device)
+encodings = ExtraEncodings(vocab).to(device)
+
+
+modelLossPairs = [(drop, 'with dropout ')]
+EPOCHS = 500
 
 finalAccs = {}
 finalLosses = {}
-for model, modelName, lossfn in modelLossPairs:
-    # adam05 = opt.Adam(model.parameters(), lr=0.2)
-    # adam1 = opt.Adam(model.parameters(), lr=0.1)
-    # adam2 = opt.Adam(model.parameters(), lr=0.01)
-    # adam3 = opt.Adam(model.parameters(), lr=0.001)
-    # SGD05 = opt.SGD(model.parameters(), lr=0.2)
-    # SGD1 = opt.SGD(model.parameters(), lr=0.1)
-    # SGD2 = opt.SGD(model.parameters(), lr=0.01)
-    # SGD3 = opt.SGD(model.parameters(), lr=0.001)
-    # opts = [adam05,adam1, adam2, adam3, SGD05, SGD1, SGD2, SGD3]
-    # optNames = ['adam-0.2','adam-0.1', 'adam-0.01', 'adam-0.001', 'SGD-0.2', 'SGD-0.1', 'SGD-0.01', 'SGD-0.001']
-    adam1 = opt.Adam(model.parameters(), lr=0.00001, weight_decay=0.1)
-    adam2 = opt.Adam(model.parameters(), lr=0.0001, weight_decay=0.1)
-    adam3 = opt.Adam(model.parameters(), lr=0.000001, weight_decay=0.1)
-    opts = [adam1, adam2, adam3]
-    optNames = ['adam-0.00001', 'adam-0.0001', 'adam-0.000001']
-    loss, acc, name = mainModel(model, modelName, lossfn, opts, optNames, 300)
-    finalAccs[name] = acc.detach().cpu().numpy()
-    finalLosses[name] = loss.detach().cpu().numpy()
+for model, modelName in modelLossPairs:
+    adam1 = opt.AdamW(model.parameters(), lr=0.1, weight_decay=0.1)
+    adam2 = opt.AdamW(model.parameters(), lr=0.01, weight_decay=0.1)
+    adam3 = opt.AdamW(model.parameters(), lr=0.001, weight_decay=0.1)
+    adam4 = opt.AdamW(model.parameters(), lr=0.0001, weight_decay=0.1)
+    adam5 = opt.AdamW(model.parameters(), lr=0.00001, weight_decay=0.1)
+    adam6 = opt.AdamW(model.parameters(), lr=0.000001, weight_decay=0.1)
+    adam7 = opt.AdamW(model.parameters(), lr=0.1)
+    adam8 = opt.AdamW(model.parameters(), lr=0.01)
+    adam9 = opt.AdamW(model.parameters(), lr=0.001)
+    adam10 = opt.AdamW(model.parameters(), lr=0.0001)
+    adam11 = opt.AdamW(model.parameters(), lr=0.00001)
+    adam12 = opt.AdamW(model.parameters(), lr=0.000001)
+    opts = [adam1, adam2, adam4, adam5, adam6, adam7, adam8, adam9, adam10, adam11, adam12]
+    optNames = ['e-1WD','e-2WD','e-3WD','e-4WD','e-5WD','e-6WD','e-1','e-2','e-3','e-4','e-5','e-6']
+    loss, acc, name = mainModel(model, modelName, mainLoss, opts, optNames, EPOCHS)
+    finalAccs[name] = acc
+    finalLosses[name] = loss
     
 accCourses = list(finalAccs.keys())
 accValues = list(finalAccs.values())
