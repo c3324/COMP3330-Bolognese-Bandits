@@ -1,5 +1,5 @@
 Simply place the inference script and the model "model" into the folder.
-Alternatively, the script and model can be placed elsewhere
+Alternatively, the script and model can be placed elsewhere- just modify the class_folder variable in the script to the directory containing the images.
 
 python library requirements:
 - os
